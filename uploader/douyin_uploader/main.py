@@ -4,11 +4,19 @@ from datetime import datetime
 from playwright.async_api import Playwright, async_playwright, Page
 import os
 import asyncio
+import signal
 
 from conf import LOCAL_CHROME_PATH
 from utils.base_social_media import set_init_script
 from utils.log import douyin_logger
 
+# 创建一个Event用于优雅退出
+stop_event = asyncio.Event()
+
+# 处理Ctrl+C信号
+def handle_sigint():
+    print("\n接收到Ctrl+C,准备退出...")
+    stop_event.set()
 
 async def cookie_auth(account_file):
     async with async_playwright() as playwright:
@@ -64,8 +72,9 @@ async def douyin_cookie_gen(account_file):
 
 
 class DouYinVideo(object):
-    def __init__(self, title, file_path, tags, publish_date: datetime, account_file, thumbnail_path=None):
+    def __init__(self, title, description, file_path, tags, publish_date: datetime, account_file, thumbnail_path=None):
         self.title = title  # 视频标题
+        self.description = description  # 视频描述
         self.file_path = file_path
         self.tags = tags
         self.publish_date = publish_date
@@ -140,17 +149,19 @@ class DouYinVideo(object):
         # 这里为了避免页面变化，故使用相对位置定位：作品标题父级右侧第一个元素的input子元素
         await asyncio.sleep(1)
         douyin_logger.info(f'  [-] 正在填充标题和话题...')
-        title_container = page.get_by_text('作品标题').locator("..").locator("xpath=following-sibling::div[1]").locator("input")
+        title_container = page.get_by_placeholder("填写作品标题，为作品获得更多流量")
         if await title_container.count():
             await title_container.fill(self.title[:30])
-        else:
-            titlecontainer = page.locator(".notranslate")
-            await titlecontainer.click()
-            await page.keyboard.press("Backspace")
-            await page.keyboard.press("Control+KeyA")
-            await page.keyboard.press("Delete")
-            await page.keyboard.type(self.title)
-            await page.keyboard.press("Enter")
+        
+
+        description_container = page.locator(".notranslate")
+        await description_container.click()
+        await page.keyboard.press("Backspace")
+        await page.keyboard.press("Control+KeyA")
+        await page.keyboard.press("Delete")
+        await page.keyboard.type(self.title)
+        await page.keyboard.press("Enter")
+
         css_selector = ".zone-container"
         for index, tag in enumerate(self.tags, start=1):
             await page.type(css_selector, "#" + tag)
@@ -178,44 +189,26 @@ class DouYinVideo(object):
         
         #上传视频封面
         await self.set_thumbnail(page, self.thumbnail_path)
+        
+        # 设置下载权限
+        await self.set_download_permission(page)
 
-        # 更换可见元素
-        await self.set_location(page, "杭州市")
-
-        # 頭條/西瓜
-        third_part_element = '[class^="info"] > [class^="first-part"] div div.semi-switch'
-        # 定位是否有第三方平台
-        if await page.locator(third_part_element).count():
-            # 检测是否是已选中状态
-            if 'semi-switch-checked' not in await page.eval_on_selector(third_part_element, 'div => div.className'):
-                await page.locator(third_part_element).locator('input.semi-switch-native-control').click()
-
-        if self.publish_date != 0:
-            await self.set_schedule_time_douyin(page, self.publish_date)
-
-        # 判断视频是否发布成功
-        while True:
-            # 判断视频是否发布成功
-            try:
-                publish_button = page.get_by_role('button', name="发布", exact=True)
-                if await publish_button.count():
-                    await publish_button.click()
-                await page.wait_for_url("https://creator.douyin.com/creator-micro/content/manage**",
-                                        timeout=3000)  # 如果自动跳转到作品页面，则代表发布成功
-                douyin_logger.success("  [-]视频发布成功")
-                break
-            except:
-                douyin_logger.info("  [-] 视频正在发布中...")
-                await page.screenshot(full_page=True)
-                await asyncio.sleep(0.5)
-
+        # 保存cookie
         await context.storage_state(path=self.account_file)  # 保存cookie
         douyin_logger.success('  [-]cookie更新完毕！')
-        await asyncio.sleep(2)  # 这里延迟是为了方便眼睛直观的观看
-        # 关闭浏览器上下文和浏览器实例
-        await context.close()
-        await browser.close()
-    
+        douyin_logger.info('  [-]所有选项已设置完成,请进行人工审核并发布')
+        douyin_logger.info('  [-]浏览器将保持打开状态,您可以进行人工审核。完成后按Ctrl+C退出程序')
+        
+        try:
+            # 等待用户按Ctrl+C
+            await stop_event.wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # 当收到退出信号时,关闭浏览器
+            await context.close()
+            await browser.close()
+
     async def set_thumbnail(self, page: Page, thumbnail_path: str):
         if thumbnail_path:
             await page.click('text="选择封面"')
@@ -226,10 +219,11 @@ class DouYinVideo(object):
             await page.locator("div[class^='semi-upload upload'] >> input.semi-upload-hidden-input").set_input_files(thumbnail_path)
             await page.wait_for_timeout(2000)  # 等待2秒
             await page.locator("div[class^='extractFooter'] button:visible:has-text('完成')").click()
-            # finish_confirm_element = page.locator("div[class^='confirmBtn'] >> div:has-text('完成')")
-            # if await finish_confirm_element.count():
-            #     await finish_confirm_element.click()
-            # await page.locator("div[class^='footer'] button:has-text('完成')").click()
+
+    async def set_download_permission(self, page: Page):
+        # 点击"不允许"选项
+        await page.locator('label:has-text("不允许")').click()
+        await page.wait_for_timeout(1000)  # 等待1秒确保选择生效
 
     async def set_location(self, page: Page, location: str = "杭州市"):
         # todo supoort location later
@@ -243,7 +237,15 @@ class DouYinVideo(object):
         await page.locator('div[role="listbox"] [role="option"]').first.click()
 
     async def main(self):
-        async with async_playwright() as playwright:
+        # 设置信号处理
+        loop = asyncio.get_event_loop()
+        loop.add_signal_handler(signal.SIGINT, handle_sigint)
+        
+        # 不使用 async with,手动创建 playwright 实例
+        playwright = await async_playwright().start()
+        try:
             await self.upload(playwright)
+        finally:
+            await playwright.stop()
 
 

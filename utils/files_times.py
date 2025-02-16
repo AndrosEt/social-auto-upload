@@ -20,7 +20,7 @@ def get_title_and_hashtags(filename):
     filename: 视频文件名
 
   Returns:
-    视频标题和 hashtag 列表
+    视频标题和 描述和 hashtag 列表
   """
 
     # 获取视频标题和 hashtag txt 文件名
@@ -33,9 +33,10 @@ def get_title_and_hashtags(filename):
     # 获取标题和 hashtag
     splite_str = content.strip().split("\n")
     title = splite_str[0]
-    hashtags = splite_str[1].replace("#", "").split(" ")
+    description = splite_str[1]
+    hashtags = splite_str[2].replace("#", "").split(" ")
 
-    return title, hashtags
+    return title, description, hashtags
 
 
 def generate_schedule_time_next_day(total_videos, videos_per_day, daily_times=None, timestamps=False, start_days=0):
