@@ -5,15 +5,18 @@ from os.path import exists
 from pathlib import Path
 
 from conf import BASE_DIR
+from uploader.bilibili_uploader.main import BilibiliUploader, extract_keys_from_json, read_cookie_json_file
 from uploader.douyin_uploader.main import douyin_setup, DouYinVideo
 from uploader.ks_uploader.main import ks_setup, KSVideo
 from uploader.tencent_uploader.main import weixin_setup, TencentVideo
 from uploader.tk_uploader.main_chrome import tiktok_setup, TiktokVideo
 from utils.base_social_media import get_supported_social_media, get_cli_action, SOCIAL_MEDIA_DOUYIN, \
-    SOCIAL_MEDIA_TENCENT, SOCIAL_MEDIA_TIKTOK, SOCIAL_MEDIA_KUAISHOU
-from utils.constant import TencentZoneTypes
-from utils.files_times import get_title_and_hashtags
+    SOCIAL_MEDIA_TENCENT, SOCIAL_MEDIA_TIKTOK, SOCIAL_MEDIA_KUAISHOU, SOCIAL_MEDIA_BILIBILI
+from utils.constant import TencentZoneTypes, VideoZoneTypes
+from utils.files_times import generate_schedule_time_next_day, get_title_and_hashtags
 
+# upload_platforms = [SOCIAL_MEDIA_DOUYIN, SOCIAL_MEDIA_BILIBILI, SOCIAL_MEDIA_TIKTOK, SOCIAL_MEDIA_TENCENT, SOCIAL_MEDIA_KUAISHOU]
+upload_platforms = [SOCIAL_MEDIA_BILIBILI]
 
 def parse_schedule(schedule_raw):
     if schedule_raw:
@@ -77,24 +80,37 @@ async def main():
             print("Scheduling videos...")
             publish_date = parse_schedule(args.schedule)
 
-        if args.platform == SOCIAL_MEDIA_DOUYIN:
-            await douyin_setup(account_file, handle=False)
-            app = DouYinVideo(title, description, video_file, tags, publish_date, account_file)
-        elif args.platform == SOCIAL_MEDIA_TIKTOK:
-            await tiktok_setup(account_file, handle=True)
-            app = TiktokVideo(title, video_file, tags, publish_date, account_file)
-        elif args.platform == SOCIAL_MEDIA_TENCENT:
-            await weixin_setup(account_file, handle=True)
-            category = TencentZoneTypes.LIFESTYLE.value  # 标记原创需要否则不需要传
-            app = TencentVideo(title, video_file, tags, publish_date, account_file, category)
-        elif args.platform == SOCIAL_MEDIA_KUAISHOU:
-            await ks_setup(account_file, handle=True)
-            app = KSVideo(title, video_file, tags, publish_date, account_file)
-        else:
-            print("Wrong platform, please check your input")
-            exit()
+        for platform in upload_platforms:
+            if platform == SOCIAL_MEDIA_DOUYIN:
+                await douyin_setup(account_file, handle=False)
+                app = DouYinVideo(title, description, video_file, tags, publish_date, account_file)
+            elif platform == SOCIAL_MEDIA_TIKTOK:
+                await tiktok_setup(account_file, handle=True)
+                app = TiktokVideo(title, video_file, tags, publish_date, account_file)
+            elif platform == SOCIAL_MEDIA_TENCENT:
+                await weixin_setup(account_file, handle=True)
+                category = TencentZoneTypes.LIFESTYLE.value  # 标记原创需要否则不需要传
+                app = TencentVideo(title, video_file, tags, publish_date, account_file, category)
+            elif platform == SOCIAL_MEDIA_KUAISHOU:
+                await ks_setup(account_file, handle=True)
+                app = KSVideo(title, video_file, tags, publish_date, account_file)
+            elif platform == SOCIAL_MEDIA_BILIBILI:
+                account_file = Path(BASE_DIR / "cookies" / "bilibili_uploader" / "account.json")
+                if not account_file.exists():
+                    print(f"{account_file.name} 配置文件不存在")
+                    exit()
+                cookie_data = read_cookie_json_file(account_file)
+                cookie_data = extract_keys_from_json(cookie_data)
+                timestamps = generate_schedule_time_next_day(1, 1, daily_times=[16], timestamps=True)
+                app = BilibiliUploader(cookie_data, video_file, title, description, VideoZoneTypes.TECH_DIGITAL.value, tags, timestamps[0])
+            else:
+                print("Wrong platform, please check your input")
+                exit()
 
-        await app.main()
+            if platform == SOCIAL_MEDIA_BILIBILI:
+                await app.upload()
+            else:
+                await app.main()
 
 
 if __name__ == "__main__":

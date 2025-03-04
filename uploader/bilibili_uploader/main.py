@@ -1,6 +1,7 @@
 import json
 import pathlib
 import random
+import os
 from biliup.plugins.bili_webup import BiliBili, Data
 
 from utils.log import bilibili_logger
@@ -62,18 +63,49 @@ class BilibiliUploader(object):
         self.data.set_tag(self.tags)
         self.data.dtime = self.dtime
 
-    def upload(self):
+    async def upload(self):
         with BiliBili(self.data) as bili:
             bili.login_by_cookies(self.cookie_data)
             bili.access_token = self.cookie_data.get('access_token')
-            video_part = bili.upload_file(str(self.file), lines=self.lines,
-                                          tasks=self.upload_thread_num)  # 上传视频，默认线路AUTO自动选择，线程数量3。
+            
+            # 使用upload_file方法，但避免嵌套asyncio.run()
+            file_path = str(self.file) if isinstance(self.file, pathlib.Path) else self.file
+            
+            # 获取上传信息
+            if not bili._auto_os:
+                bili._auto_os = bili.probe()
+                if not bili._auto_os:
+                    bilibili_logger.error(f'[-] 获取上传线路失败')
+                    return False
+                
+            # 准备上传参数
+            total_size = os.path.getsize(file_path)
+            with open(file_path, 'rb') as f:
+                query = {
+                    'r': bili._auto_os['os'],
+                    'profile': 'ugcupos/bup' if 'upos' == bili._auto_os['os'] else "ugcupos/bupfetch",
+                    'ssl': 0,
+                    'version': '2.8.12',
+                    'build': 2081200,
+                    'name': os.path.basename(file_path),
+                    'size': total_size,
+                }
+                resp = bili._BiliBili__session.get(
+                    f"https://member.bilibili.com/preupload?{bili._auto_os['query']}", params=query,
+                    timeout=5)
+                ret = resp.json()
+                
+                # 直接使用upos方法上传
+                video_part = await bili.upos(f, total_size, ret, tasks=self.upload_thread_num)
+            
             video_part['title'] = self.title
             self.data.append(video_part)
+            
+            # submit方法不是异步方法，不需要await
             ret = bili.submit()  # 提交视频
             if ret.get('code') == 0:
-                bilibili_logger.success(f'[+] {self.file.name}上传 成功')
+                bilibili_logger.success(f'[+] {os.path.basename(file_path)}上传 成功')
                 return True
             else:
-                bilibili_logger.error(f'[-] {self.file.name}上传 失败, error messge: {ret.get("message")}')
+                bilibili_logger.error(f'[-] {os.path.basename(file_path)}上传 失败, error messge: {ret.get("message")}')
                 return False
